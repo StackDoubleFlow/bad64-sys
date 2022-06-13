@@ -1,11 +1,21 @@
-use std::env;
+use std::env::{self, VarError};
 use std::ffi::OsStr;
 use std::path::PathBuf;
 
+#[cfg(target_os = "linux")]
+const NDK_HOST_TAG: &str = "linux-x86_64";
+#[cfg(target_os = "macos")]
+const NDK_HOST_TAG: &str = "darwin-x86_64";
+#[cfg(all(target_os = "windows", target_arch = "x86"))]
+const NDK_HOST_TAG: &str = "windows";
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+const NDK_HOST_TAG: &str = "windows-x86_64";
+
 fn main() {
-    let ignorelist: Vec<&OsStr> = [
-        "test.c", "gofer.c", "format.c", "encodings_fmt.c",
-    ].iter().map(OsStr::new).collect();
+    let ignorelist: Vec<&OsStr> = ["test.c", "gofer.c", "format.c", "encodings_fmt.c"]
+        .iter()
+        .map(OsStr::new)
+        .collect();
 
     let dotc_files = glob::glob("arch-arm64/disassembler/*.c")
         .expect("Failed to read glob pattern")
@@ -26,10 +36,30 @@ fn main() {
     // Tell cargo to invalidate the built crate whenever the wrapper changes
     println!("cargo:rerun-if-changed=wrapper.h");
 
+    let ndk_path = match env::var("ANDROID_NDK_HOME") {
+        Ok(path) => PathBuf::from(path),
+        Err(VarError::NotPresent) => {
+            panic!("please set $ANDROID_NDK_HOME to the path of your ndk installation")
+        }
+        Err(e) => panic!("{:?}", e),
+    };
+
+    let sysroot_path = ndk_path.join(format!("toolchains/llvm/prebuilt/{}/sysroot", NDK_HOST_TAG));
+    let ndk_sysroot_include = sysroot_path.join("usr/include");
+
+    // TODO
+    let target = "aarch64-linux-android";
+    let ndk_sysroot_target_include = sysroot_path.join(format!("usr/include/{}", target));
+
     // The bindgen::Builder is the main entry point
     // to bindgen, and lets you build up options for
     // the resulting bindings.
     let bindings = bindgen::Builder::default()
+        .clang_arg(format!("-isystem{}", ndk_sysroot_include.to_str().unwrap()))
+        .clang_arg(format!(
+            "-isystem{}",
+            ndk_sysroot_target_include.to_str().unwrap()
+        ))
         // The input header we would like to generate
         // bindings for.
         .header("wrapper.h")
